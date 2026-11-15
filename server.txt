@@ -15,17 +15,110 @@ DATA YANG DIPAKAI
 - Password user 2 : UkomDB@2026
 - User hotspot    : kafka / kafka02 (password 14)
 - DNS Server      : bind9 di server, nama ns1.ukom12tkjkafka-14.sch.id
+- Interface VM    : cek dengan ip a (biasanya enp0s3), mode Bridged ke ether2
 
 
 ==========================================================
 A. PERSIAPAN
 ==========================================================
 
+ALUR HEMAT WAKTU (ujian 2,5 jam):
+- Install Ubuntu dengan adapter Host-only (mode offline, tidak ada
+  update otomatis, jadi lebih cepat).
+- Setelah install selesai, ganti adapter ke Bridged lalu minta IP lewat
+  netplan (langkah 0a sampai 0e di bawah).
+
+0a. Matikan VM, ubah adapter jaringan:
+    VirtualBox > Settings > Network > Adapter 1
+    - Enable Network Adapter : dicentang
+    - Attached to            : Bridged Adapter
+    - Name                   : kartu jaringan fisik yang terhubung kabel ke ether2
+                               (yang sama dengan yang dipakai laptop host)
+    - Advanced > Promiscuous Mode : Allow All
+    - Advanced > Cable Connected  : dicentang
+    Lalu nyalakan VM.
+
+0b. Lihat nama interface dan file netplan:
+    ip a
+    ls /etc/netplan
+    (nama interface biasanya enp0s3, catat nama yang tampil.
+     Nama file biasanya 50-cloud-init.yaml atau 00-installer-config.yaml)
+
+0c. Edit file netplan (sesuaikan nama file dan nama interface):
+    sudo nano /etc/netplan/50-cloud-init.yaml
+
+    OPSI A - minta IP otomatis dari DHCP router (disarankan):
+    ----------------------------------------------------
+network:
+  version: 2
+  ethernets:
+    enp0s3:
+      dhcp4: true
+    ----------------------------------------------------
+    Syarat: static lease di router sudah mengikat MAC VM ini ke 10.10.14.13
+    (lihat langkah 8 di file network). IP yang didapat harus 10.10.14.13.
+
+    OPSI B - IP manual (cadangan kalau DHCP tidak jalan, tidak bergantung MAC):
+    ----------------------------------------------------
+network:
+  version: 2
+  ethernets:
+    enp0s3:
+      dhcp4: false
+      addresses:
+        - 10.10.14.13/28
+      routes:
+        - to: default
+          via: 10.10.14.1
+      nameservers:
+        addresses: [10.10.14.1, 8.8.8.8]
+    ----------------------------------------------------
+    Kalau memakai Opsi B, kecilkan pool DHCP di router supaya tidak memberi
+    10.10.14.13 ke perangkat lain:
+    /ip pool set pool-server ranges=10.10.14.2-10.10.14.12
+
+    Aturan penulisan YAML:
+    - Indentasi memakai SPASI, bukan Tab.
+    - Jumlah spasi harus rapi (kelipatan 2) dan sejajar seperti contoh.
+    - Ganti enp0s3 dengan nama interface dari ip a.
+
+0d. Terapkan:
+    sudo chmod 600 /etc/netplan/*.yaml
+    sudo netplan apply
+
+    Kalau ingin aman terhadap salah ketik, pakai: sudo netplan try
+    (tekan Enter untuk menerima; kalau tidak, otomatis kembali).
+
+0e. Cek hasil:
+    ip a                  (harus muncul 10.10.14.13/28 di interface bridged)
+    ping -c 3 10.10.14.1  (router)
+    ping -c 3 8.8.8.8     (Internet)
+
+    Kalau belum dapat IP:
+    - Pastikan adapter VirtualBox Bridged ke NIC yang benar (langkah 0a).
+    - Cek nama interface di file netplan sama dengan di ip a.
+    - Cek di router: /ip dhcp-server lease print
+    - Kalau IP yang didapat bukan 10.10.14.13 (misal .12), MAC VM tidak
+      sama dengan static lease. Perbarui di router:
+      /ip dhcp-server lease remove [find comment=VM-Server]
+      /ip dhcp-server lease add address=10.10.14.13 mac-address=MAC-VM server=dhcp-server-vm comment=VM-Server
+      (MAC-VM: lihat ip link di VM, atau dari lease print di router)
+      lalu di VM: sudo netplan apply
+    - Kalau perintah "dhclient" tidak ada, pakai: sudo netplan apply
+
 1. Cek IP server (harus 10.10.14.13):
    ip a
 
-2. Update sistem:
-   sudo apt update && sudo apt upgrade -y
+2. Update daftar paket:
+   sudo apt update
+   (apt upgrade -y dilewati saat ujian karena memakan waktu lama.
+    Kalau waktu longgar: sudo apt update && sudo apt upgrade -y)
+
+2b. Hemat waktu (opsional): install semua paket sekaligus, kecuali phpmyadmin
+    karena interaktif:
+    sudo apt install -y mariadb-server mariadb-client apache2 php libapache2-mod-php php-mysql bind9 bind9utils dnsutils
+    Kalau sudah dijalankan, langkah 3, 11, dan G1 tidak perlu diulang.
+    Konfigurasi bind9 baru dikerjakan di bagian G.
 
 
 ==========================================================
