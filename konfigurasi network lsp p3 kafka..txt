@@ -1,0 +1,138 @@
+# ==========================================================
+# KONFIGURASI NETWORK LSP P3 - KAFKA - ABSEN 14  (NAT SAJA, TANPA FIREWALL FILTER)
+# Router : MikroTik RouterOS v6 (wlan1 bawaan)
+# IP Server (VM) : 10.10.14.13  (dapat dari DHCP, dikunci static lease)
+# DNS            : bind9 di server (langkah 13), tanpa DNS static di router
+# Nama bridge    : bridge-hotspot (huruf kecil semua, jangan diganti)
+# ==========================================================
+# CATATAN SEBELUM MULAI
+# - Kalau router sudah pernah diisi/berantakan, mulai dari kosong dulu
+#   (kabel ke ether2 atau ether3, jangan lewat WiFi):
+#       /system reset-configuration no-defaults=yes skip-backup=yes
+#   Setelah reboot, masuk Winbox lewat tab Neighbors (MAC address).
+# - Jalankan konfigurasi lewat ether2/ether3, bukan WiFi, karena WiFi/ether4
+#   masuk bridge dan koneksi bisa putus.
+#
+# URUTAN:
+# - Langkah 1 sampai 12 : jalankan berurutan, paste per bagian
+# - Langkah 13 : jalankan SETELAH bind9 di server selesai dan lolos tes dig
+#                (lihat catatan server bagian G)
+# ==========================================================
+
+# 1. Identitas
+/system identity set name=R-kafka-14
+
+# 2. Koneksi ke ISP (ether1)
+/ip dhcp-client add interface=ether1 disabled=no add-default-route=yes use-peer-dns=no comment=ISP
+
+# 3. Bridge untuk hotspot (ether4 + wlan1)
+/interface bridge add name=bridge-hotspot
+/interface bridge port add bridge=bridge-hotspot interface=ether4
+/interface bridge port add bridge=bridge-hotspot interface=wlan1
+
+# 4. IP Address
+/ip address
+add address=10.10.14.1/28 interface=ether2 comment=Server
+add address=100.100.14.1/30 interface=ether3 comment=Client-Kabel
+add address=192.168.14.1/24 interface=bridge-hotspot comment=Hotspot
+
+# 5. Wireless (SSID)
+/interface wireless set wlan1 mode=ap-bridge ssid=ukom12tkjkafka-14 band=2ghz-b/g/n disabled=no
+
+# 6. DNS router (hanya untuk Internet; domain dijawab bind9 di server)
+/ip dns set allow-remote-requests=yes servers=8.8.8.8,1.1.1.1
+
+# 7. NAT agar semua jaringan lokal bisa ke Internet (satu-satunya rule firewall)
+/ip firewall nat add chain=srcnat out-interface=ether1 action=masquerade comment=NAT-Internet
+
+# 8. DHCP server (manual, nama pool dan server langsung benar)
+# --- Hotspot ---
+/ip pool add name=pool-hotspot ranges=192.168.14.2-192.168.14.254
+/ip dhcp-server network add address=192.168.14.0/24 gateway=192.168.14.1 dns-server=192.168.14.1 comment=Hotspot
+/ip dhcp-server add name=dhcp-hotspot interface=bridge-hotspot address-pool=pool-hotspot lease-time=1d disabled=no
+
+# --- Server VM (ether2) ---
+/ip pool add name=pool-server ranges=10.10.14.2-10.10.14.14
+/ip dhcp-server network add address=10.10.14.0/28 gateway=10.10.14.1 dns-server=10.10.14.1 comment=Server
+/ip dhcp-server add name=dhcp-server-vm interface=ether2 address-pool=pool-server lease-time=1d disabled=no
+
+# --- Laptop kabel (ether3) ---
+/ip pool add name=pool-laptop ranges=100.100.14.2
+/ip dhcp-server network add address=100.100.14.0/30 gateway=100.100.14.1 dns-server=100.100.14.1 comment=Client-Kabel
+/ip dhcp-server add name=dhcp-laptop interface=ether3 address-pool=pool-laptop lease-time=1d disabled=no
+
+# --- Kunci IP VM ke 10.10.14.13 ---
+# MAC VM saat ini: 08:00:27:42:9D:E5
+# PENTING: kalau VM di-install ulang / dibuat baru, MAC berubah. Samakan dengan
+# VirtualBox > Settings > Network > Advanced > MAC Address (atau lihat MAC di
+# /ip dhcp-server lease print setelah VM dapat IP).
+# Kalau VM sudah punya lease lain, hapus dulu: /ip dhcp-server lease print lalu remove
+/ip dhcp-server lease add address=10.10.14.13 mac-address=08:00:27:42:9D:E5 server=dhcp-server-vm comment=VM-Server
+
+# --- CEK SEBELUM LANJUT (3 DHCP server harus ada, tanpa tanda I atau X) ---
+/ip pool print
+/ip dhcp-server print
+
+# 9. Hotspot
+/ip hotspot profile add name=hsprof-kafka hotspot-address=192.168.14.1 login-by=http-chap,http-pap
+/ip hotspot user profile add name=up-kafka rate-limit=7M/7M shared-users=2
+/ip hotspot add name=hotspot-kafka interface=bridge-hotspot address-pool=pool-hotspot profile=hsprof-kafka disabled=no
+/ip hotspot user add name=kafka password=14 profile=up-kafka comment="CLIENT HP 1"
+/ip hotspot user add name=kafka02 password=14 profile=up-kafka comment="CLIENT HP 2"
+
+# --- CEK: hotspot harus muncul tanpa tanda I atau X ---
+/ip hotspot print
+
+# 10. Limit bandwidth client kabel 10 Mbps
+/queue simple add name=limit-kabel target=100.100.14.0/30 max-limit=10M/10M
+
+# 11. Service (membatasi Winbox dan SSH ke jaringan lokal)
+# Pastikan laptop yang dipakai konfigurasi ada di salah satu network ini.
+/ip service
+set ftp disabled=yes
+set ssh address=10.10.14.0/28,192.168.14.0/24,100.100.14.0/30
+set telnet disabled=yes
+set winbox address=10.10.14.0/28,192.168.14.0/24,100.100.14.0/30
+set api disabled=yes
+set api-ssl disabled=yes
+
+# 12. Zona waktu
+/system clock
+set time-zone-name=Asia/Jakarta
+
+# 13. DNS ke server bind9 (semua jaringan)
+# JALANKAN HANYA SETELAH bind9 di server selesai dan tes dig berhasil.
+# Sebelum itu, DNS DHCP tetap ke router supaya server bisa apt install bind9.
+/ip dhcp-server network set [find address=10.10.14.0/28] dns-server=10.10.14.13
+/ip dhcp-server network set [find address=100.100.14.0/30] dns-server=10.10.14.13
+/ip dhcp-server network set [find address=192.168.14.0/24] dns-server=10.10.14.13
+# Setelah ini client harus meminta IP ulang (ipconfig /release lalu /renew,
+# atau putus-sambung WiFi di HP).
+
+# Kalau bind9 bermasalah, kembali ke DNS router (Internet jalan, domain tidak):
+# /ip dhcp-server network set [find address=10.10.14.0/28] dns-server=10.10.14.1
+# /ip dhcp-server network set [find address=100.100.14.0/30] dns-server=100.100.14.1
+# /ip dhcp-server network set [find address=192.168.14.0/24] dns-server=192.168.14.1
+
+# ==========================================================
+# PENGUJIAN
+# - Router : /ping 8.8.8.8 , /ping 10.10.14.13 , /ip dhcp-server lease print
+# - VM     : ip a (harus 10.10.14.13/28), ping 10.10.14.1, ping 8.8.8.8
+# - Laptop kabel : ping 100.100.14.1, ping 8.8.8.8, nslookup ukom12tkjkafka-14.sch.id
+#                  (setelah langkah 13: Server: ns1.ukom12tkjkafka-14.sch.id)
+# - HP     : forget WiFi, connect SSID ukom12tkjkafka-14, buka http://neverssl.com,
+#            login kafka / kafka02 (password 14, huruf kecil semua),
+#            lalu buka http://ukom12tkjkafka-14.sch.id
+# - Router : /ip hotspot active print (2 sesi), /queue simple print (7M dan 10M)
+# - Kalau VM mati, DNS tidak jalan (nslookup timed out, domain tidak terbuka).
+#   Nyalakan VM, tunggu bind9 aktif, lalu ipconfig /flushdns dan ulangi.
+#
+# TROUBLESHOOTING
+# - Halaman login hotspot tidak muncul : /ip hotspot print (harus ada, tanpa I/X),
+#   lalu cek DNS hotspot (langkah 13) dan Private DNS di HP. Tes cepat: kembalikan
+#   DNS hotspot ke router (perintah rollback di bawah langkah 13).
+# - invalid username or password : username harus huruf kecil (keyboard HP
+#   sering mengubah k menjadi K).
+# - Kalau ada sisa firewall filter lama di router (bukan buatan hotspot):
+#   /ip firewall filter remove [find dynamic=no]
+# ==========================================================

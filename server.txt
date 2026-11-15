@@ -1,0 +1,532 @@
+==========================================================
+CATATAN KONFIGURASI SERVER - LSP PAKET 3
+Nama  : Kafka
+Absen : 14
+==========================================================
+
+DATA YANG DIPAKAI
+- IP Server       : 10.10.14.13
+- Gateway/DNS     : 10.10.14.1
+- Domain          : ukom12tkjkafka-14.sch.id
+- Database        : ukom14
+- User database   : kafka
+- Password        : UkomDB@2026
+- User database 2 : kafka02
+- Password user 2 : UkomDB@2026
+- User hotspot    : kafka / kafka02 (password 14)
+- DNS Server      : bind9 di server, nama ns1.ukom12tkjkafka-14.sch.id
+
+
+==========================================================
+A. PERSIAPAN
+==========================================================
+
+1. Cek IP server (harus 10.10.14.13):
+   ip a
+
+2. Update sistem:
+   sudo apt update && sudo apt upgrade -y
+
+
+==========================================================
+B. DATABASE (MariaDB)
+==========================================================
+
+3. Install:
+   sudo apt install mariadb-server mariadb-client -y
+
+4. Aktifkan dan cek (harus active (running)):
+   sudo systemctl enable --now mariadb
+   sudo systemctl status mariadb
+
+5. Amankan MariaDB:
+   sudo mariadb-secure-installation
+
+   Jawaban:
+   Switch to unix_socket authentication? Y
+   Change root password?                 N
+   Remove anonymous users?               Y
+   Disallow root login remotely?         Y
+   Remove test database?                 Y
+   Reload privilege tables?              Y
+
+6. Masuk ke MariaDB dan buat database:
+   sudo mariadb
+
+   CREATE DATABASE ukom14 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+   SHOW DATABASES;
+
+7. Buat user dan beri hak akses:
+   CREATE USER 'kafka'@'localhost' IDENTIFIED BY 'UkomDB@2026';
+   GRANT ALL PRIVILEGES ON ukom14.* TO 'kafka'@'localhost';
+   FLUSH PRIVILEGES;
+
+7b. Buat user database kedua (kafka02):
+   CREATE USER 'kafka02'@'localhost' IDENTIFIED BY 'UkomDB@2026';
+   GRANT ALL PRIVILEGES ON ukom14.* TO 'kafka02'@'localhost';
+   FLUSH PRIVILEGES;
+
+   (Opsional) Kalau user kedua hanya boleh membaca data, ganti baris GRANT
+   di atas dengan:
+   CREATE USER 'kafka02'@'localhost' IDENTIFIED BY 'UkomDB@2026';
+   GRANT SELECT ON ukom14.* TO 'kafka02'@'localhost';
+   FLUSH PRIVILEGES;
+
+   Cek user:
+   SELECT User, Host FROM mysql.user;
+   SHOW GRANTS FOR 'kafka02'@'localhost';
+
+8. Buat tabel:
+   USE ukom14;
+   CREATE TABLE informasi (
+       id INT AUTO_INCREMENT PRIMARY KEY,
+       nama VARCHAR(100) NOT NULL,
+       keterangan TEXT,
+       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+   );
+   SHOW TABLES;
+
+9. Isi data:
+   INSERT INTO informasi (nama, keterangan) VALUES
+   ('UKOM TKJ', 'Web Server dan Database Server'),
+   ('Kafka Absen 14', 'Konfigurasi jaringan Ukom'),
+   ('MikroTik', 'Gateway dan Hotspot'),
+   ('Server', 'Ubuntu Server 10.10.14.13');
+   SELECT * FROM informasi;
+   EXIT;
+
+10. Tes login user kafka:
+    mariadb -u kafka -p ukom14
+
+    Masukkan password UkomDB@2026, lalu jalankan:
+    SELECT * FROM informasi;
+
+    Kalau data muncul, database beres. Keluar dengan: EXIT;
+
+10b. Tes login user kafka02:
+    mariadb -u kafka02 -p ukom14
+
+    Masukkan password UkomDB@2026, lalu jalankan:
+    SELECT * FROM informasi;
+    Keluar dengan: EXIT;
+
+
+==========================================================
+C. WEB SERVER (Apache + PHP)
+==========================================================
+
+11. Install:
+    sudo apt install apache2 php libapache2-mod-php php-mysql -y
+    sudo systemctl enable --now apache2
+
+12. Buat file koneksi database:
+    sudo nano /var/www/html/database.php
+
+    Isi:
+    ----------------------------------------------------
+<?php
+$host = "localhost";
+$user = "kafka";
+$password = "UkomDB@2026";
+$database = "ukom14";
+
+$conn = new mysqli($host, $user, $password, $database);
+
+if ($conn->connect_error) {
+    die("Koneksi database gagal: " . $conn->connect_error);
+}
+
+echo "<h1>Koneksi Database Berhasil</h1>";
+
+$result = $conn->query("SELECT * FROM informasi");
+
+if ($result && $result->num_rows > 0) {
+    while ($row = $result->fetch_assoc()) {
+        echo "<hr>";
+        echo "ID: " . htmlspecialchars($row["id"]) . "<br>";
+        echo "Nama: " . htmlspecialchars($row["nama"]) . "<br>";
+        echo "Keterangan: " . htmlspecialchars($row["keterangan"]) . "<br>";
+        echo "Dibuat: " . htmlspecialchars($row["created_at"]) . "<br>";
+    }
+} else {
+    echo "Tidak ada data.";
+}
+
+$conn->close();
+?>
+    ----------------------------------------------------
+
+13. Restart dan tes dari server:
+    sudo systemctl restart apache2
+    curl http://localhost/database.php
+
+    Harus muncul "Koneksi Database Berhasil" beserta 4 data.
+
+
+==========================================================
+D. LANDING PAGE HTML
+==========================================================
+
+14. Buat landing page (index.php, menampilkan data dari database):
+    sudo nano /var/www/html/index.php
+
+    Kalau sebelumnya sudah ada index.html, hapus dulu supaya tidak menimpa
+    index.php (Apache memprioritaskan index.html di atas index.php):
+    sudo rm -f /var/www/html/index.html
+
+    Isi:
+    ----------------------------------------------------
+<?php
+$conn = new mysqli("localhost", "kafka", "UkomDB@2026", "ukom14");
+$data = [];
+if (!$conn->connect_error) {
+    $result = $conn->query("SELECT nama, keterangan FROM informasi");
+    while ($row = $result->fetch_assoc()) { $data[] = $row; }
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UKOM TKJ - Kafka</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f172a; color: #fff;
+               text-align: center; padding: 50px 20px; }
+        .card { background: #1e293b; border-radius: 10px; padding: 16px; margin: 12px auto;
+                max-width: 500px; text-align: left; }
+        .card h3 { margin: 0 0 6px; color: #38bdf8; }
+        a { display: inline-block; margin: 8px; padding: 10px 20px; border-radius: 6px;
+            background: #38bdf8; color: #0f172a; text-decoration: none; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Selamat Datang di Web Server UKOM</h1>
+    <p>Kafka | Absen 14 | ukom12tkjkafka-14.sch.id</p>
+    <a href="database.php">Data Database</a>
+    <a href="phpmyadmin">phpMyAdmin</a>
+
+    <h2>Data dari Database</h2>
+    <?php if ($data): foreach ($data as $d): ?>
+        <div class="card">
+            <h3><?= htmlspecialchars($d["nama"]) ?></h3>
+            <?= htmlspecialchars($d["keterangan"]) ?>
+        </div>
+    <?php endforeach; else: ?>
+        <p>Data tidak tersedia.</p>
+    <?php endif; ?>
+</body>
+</html>
+    ----------------------------------------------------
+
+    Cek isi folder (harus ada index.php dan database.php, TIDAK ada index.html):
+    ls /var/www/html
+
+    Tes dari server:
+    curl http://localhost
+    (harus muncul kode HTML dengan 4 data: UKOM TKJ, Kafka Absen 14,
+     MikroTik, Server)
+
+    Catatan: file ini berekstensi .php, tetapi yang diterima browser tetap
+    halaman HTML biasa. Kalau datanya berubah di tabel informasi,
+    tampilan kartunya ikut berubah.
+
+
+==========================================================
+E. phpMyAdmin
+==========================================================
+
+15. Install:
+    sudo apt install phpmyadmin -y
+
+    - Web server: tekan SPACE pada apache2, lalu Enter.
+    - dbconfig-common: pilih Yes (kalau error, pilih No).
+    - Password phpMyAdmin: isi bebas atau kosongkan.
+
+16. Aktifkan konfigurasi:
+    sudo a2enconf phpmyadmin
+    sudo systemctl reload apache2
+
+    Kalau a2enconf gagal, buat symlink dulu lalu ulangi perintah di atas:
+    sudo ln -s /etc/phpmyadmin/apache.conf /etc/apache2/conf-available/phpmyadmin.conf
+
+17. Cek file (harus ada index.php, libraries, templates):
+    ls -lah /usr/share/phpmyadmin
+
+18. Tes dari server (hasil: 200 OK atau redirect ke login):
+    curl -I http://127.0.0.1/phpmyadmin/
+
+19. Login phpMyAdmin pakai user kafka atau kafka02, password UkomDB@2026.
+    Jangan pakai root, karena root memakai unix_socket.
+
+    Login-nya di halaman web phpMyAdmin lewat browser, bukan di terminal Ubuntu.
+
+    Caranya:
+    - Dari laptop kabel (atau HP yang sudah login hotspot), buka browser.
+    - Ketik alamat: http://ukom12tkjkafka-14.sch.id/phpmyadmin
+      Kalau domain belum jalan, pakai IP server: http://10.10.14.13/phpmyadmin
+    - Di halaman login phpMyAdmin isi:
+      Username : kafka (atau kafka02)
+      Password : UkomDB@2026
+      Server   : biarkan default (localhost)
+    - Klik Go. Setelah masuk, pilih database ukom14 di panel kiri,
+      lalu tabel informasi untuk melihat datanya.
+
+    Kalau dari HP wireless:
+    Login hotspot dulu (kafka / kafka02, password 14), baru buka alamat
+    phpMyAdmin di atas. Jangan tertukar: password hotspot itu 14,
+    sedangkan password database itu UkomDB@2026.
+
+    Kalau login gagal:
+    - Pastikan username huruf kecil semua.
+    - Jangan pakai root, karena root memakai unix_socket.
+    - Kalau halaman phpMyAdmin tidak muncul (404), cek lagi langkah 16 dan 18.
+
+
+==========================================================
+F. VIRTUAL HOST (DOMAIN)
+==========================================================
+
+20. Buat file:
+    sudo nano /etc/apache2/sites-available/ukom12tkjkafka-14.sch.id.conf
+
+    Isi:
+    ----------------------------------------------------
+<VirtualHost *:80>
+    ServerName ukom12tkjkafka-14.sch.id
+
+    DocumentRoot /var/www/html
+
+    <Directory /var/www/html>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog ${APACHE_LOG_DIR}/ukom12tkjkafka-error.log
+    CustomLog ${APACHE_LOG_DIR}/ukom12tkjkafka-access.log combined
+</VirtualHost>
+    ----------------------------------------------------
+
+21. Aktifkan site (jangan dilewati):
+    sudo a2ensite ukom12tkjkafka-14.sch.id.conf
+    sudo apache2ctl configtest
+    sudo systemctl reload apache2
+
+    configtest harus menampilkan: Syntax OK
+
+22. Kalau ufw aktif, izinkan web:
+    sudo ufw status
+    sudo ufw allow 80/tcp
+
+
+==========================================================
+G. DNS SERVER (bind9)
+==========================================================
+
+Tujuan: pada nslookup, baris "Server:" menampilkan nama server
+(ns1.ukom12tkjkafka-14.sch.id), dan jawabannya langsung dari server Ubuntu.
+
+URUTAN KERJA (jangan dibalik):
+1. Konfigurasi bind9 di server (G1 sampai G6)
+2. Tes dengan dig di server (G7) sampai semua hasil benar
+3. BARU ubah DNS di DHCP router (G8)
+Kalau DHCP diarahkan ke server sebelum bind9 berjalan, client kehilangan DNS
+dan server tidak bisa apt install.
+
+Catatan: router TIDAK memakai DNS static. Semua client (ether2, ether3,
+dan hotspot) memakai bind9 di server ini sebagai DNS.
+
+G1. Install:
+    sudo apt install bind9 bind9utils dnsutils -y
+
+G2. Opsi umum:
+    sudo nano /etc/bind/named.conf.options
+
+    Isi (ganti seluruh isinya):
+    ----------------------------------------------------
+options {
+    directory "/var/cache/bind";
+    listen-on { 127.0.0.1; 10.10.14.13; };
+    allow-query { 127.0.0.1; 10.10.14.0/28; 100.100.14.0/30; 192.168.14.0/24; };
+    recursion yes;
+    allow-recursion { 127.0.0.1; 10.10.14.0/28; 100.100.14.0/30; 192.168.14.0/24; };
+    forwarders { 8.8.8.8; 1.1.1.1; };
+    dnssec-validation no;
+};
+    ----------------------------------------------------
+
+G3. Daftarkan zona:
+    sudo nano /etc/bind/named.conf.local
+
+    Isi:
+    ----------------------------------------------------
+zone "ukom12tkjkafka-14.sch.id" {
+    type master;
+    file "/etc/bind/db.ukom12tkjkafka-14";
+};
+
+zone "14.10.10.in-addr.arpa" {
+    type master;
+    file "/etc/bind/db.10.10.14";
+};
+    ----------------------------------------------------
+
+G4. Zona forward (nama ke IP):
+    sudo nano /etc/bind/db.ukom12tkjkafka-14
+
+    Isi:
+    ----------------------------------------------------
+$TTL 604800
+@   IN  SOA ns1.ukom12tkjkafka-14.sch.id. admin.ukom12tkjkafka-14.sch.id. (
+            1       ; Serial
+            604800  ; Refresh
+            86400   ; Retry
+            2419200 ; Expire
+            604800 ) ; Negative TTL
+@   IN  NS  ns1.ukom12tkjkafka-14.sch.id.
+@   IN  A   10.10.14.13
+ns1 IN  A   10.10.14.13
+www IN  A   10.10.14.13
+    ----------------------------------------------------
+
+G5. Zona reverse (IP ke nama, ini yang membuat "Server:" tidak UnKnown):
+    sudo nano /etc/bind/db.10.10.14
+
+    Isi:
+    ----------------------------------------------------
+$TTL 604800
+@   IN  SOA ns1.ukom12tkjkafka-14.sch.id. admin.ukom12tkjkafka-14.sch.id. (
+            1
+            604800
+            86400
+            2419200
+            604800 )
+@   IN  NS  ns1.ukom12tkjkafka-14.sch.id.
+13  IN  PTR ns1.ukom12tkjkafka-14.sch.id.
+    ----------------------------------------------------
+
+G6. Cek konfigurasi, jalankan, dan buka firewall:
+    sudo named-checkconf
+    sudo named-checkzone ukom12tkjkafka-14.sch.id /etc/bind/db.ukom12tkjkafka-14
+    sudo named-checkzone 14.10.10.in-addr.arpa /etc/bind/db.10.10.14
+    sudo systemctl enable --now bind9
+    sudo systemctl restart bind9
+    sudo ufw allow 53
+
+    Tiga perintah cek harus tanpa error (zona menampilkan OK).
+    Kalau systemctl tidak mengenali bind9, pakai nama: named
+
+G7. Tes dari server sendiri:
+    dig @10.10.14.13 ukom12tkjkafka-14.sch.id +short
+    dig @10.10.14.13 -x 10.10.14.13 +short
+    dig @10.10.14.13 google.com +short
+
+    Hasil yang benar:
+    10.10.14.13
+    ns1.ukom12tkjkafka-14.sch.id.
+    (IP Google)
+
+G8. Di router - arahkan DNS DHCP ke server (setelah G7 benar semua).
+    Ini sama dengan langkah 13 di file network:
+    /ip dhcp-server network set [find address=10.10.14.0/28] dns-server=10.10.14.13
+    /ip dhcp-server network set [find address=100.100.14.0/30] dns-server=10.10.14.13
+    /ip dhcp-server network set [find address=192.168.14.0/24] dns-server=10.10.14.13
+
+    Firewall: router tidak memakai firewall filter (hanya NAT), jadi tidak
+    ada rule yang perlu ditambah untuk DNS.
+
+G9. Tes dari laptop:
+    ipconfig /release
+    ipconfig /renew
+    ipconfig /flushdns
+    nslookup ukom12tkjkafka-14.sch.id
+
+    Hasil yang diharapkan:
+    Server:  ns1.ukom12tkjkafka-14.sch.id
+    Address: 10.10.14.13
+
+    Name:    ukom12tkjkafka-14.sch.id
+    Address: 10.10.14.13
+
+    (Screenshot ini untuk kategori 1)
+
+G10. Kembali ke DNS router (kalau ada masalah):
+    /ip dhcp-server network set [find address=10.10.14.0/28] dns-server=10.10.14.1
+    /ip dhcp-server network set [find address=100.100.14.0/30] dns-server=100.100.14.1
+    /ip dhcp-server network set [find address=192.168.14.0/24] dns-server=192.168.14.1
+    (Internet tetap jalan, tetapi domain tidak ter-resolve tanpa bind9.
+     Untuk sementara pakai file hosts di bawah.)
+
+Kalau browser tidak mau resolve domain:
+- Matikan Secure DNS/DoH di browser.
+- Cadangan: edit file hosts. Buka Notepad dengan Run as administrator,
+  buka C:\Windows\System32\drivers\etc\hosts, tambahkan di paling bawah:
+  10.10.14.13 ukom12tkjkafka-14.sch.id
+
+Risiko:
+- Kalau VM mati atau bind9 berhenti, client yang DNS-nya ke server
+  kehilangan DNS. Saat tes, pastikan VM menyala.
+- Perubahan G8 berlaku setelah client meminta IP ulang (renew).
+
+
+==========================================================
+H. PENGUJIAN AKHIR
+==========================================================
+
+Dari server:
+   curl http://localhost/database.php
+   -> Data muncul
+
+Dari laptop kabel:
+   nslookup ukom12tkjkafka-14.sch.id             -> Server: ns1.ukom12tkjkafka-14.sch.id
+                                                    Address: 10.10.14.13
+   http://ukom12tkjkafka-14.sch.id               -> Landing page
+   http://ukom12tkjkafka-14.sch.id/database.php  -> Koneksi berhasil + 4 data
+   http://ukom12tkjkafka-14.sch.id/phpmyadmin    -> Halaman login
+
+Dari HP wireless:
+   Login hotspot (kafka / kafka02, password 14),
+   lalu buka http://ukom12tkjkafka-14.sch.id    -> Landing page
+   (DNS HP juga bind9: lihat G8)
+
+Catatan: kalau browser tidak mau resolve domain, matikan Secure DNS/DoH
+di browser, karena itu melewati DNS bind9 di server.
+
+==========================================================
+I. MENAMBAH LANDING PAGE BARU (OPSIONAL)
+==========================================================
+
+Halaman baru di domain yang sama (tanpa konfigurasi router):
+   sudo mkdir /var/www/html/promo
+   sudo nano /var/www/html/promo/index.html
+   Buka: http://ukom12tkjkafka-14.sch.id/promo
+
+Subdomain baru (cukup di bind9, tanpa konfigurasi router):
+   a. Di server (bind9): sudo nano /etc/bind/db.ukom12tkjkafka-14
+      Tambahkan baris:   landing2 IN A 10.10.14.13
+      Naikkan Serial dari 1 menjadi 2, lalu:
+      sudo named-checkzone ukom12tkjkafka-14.sch.id /etc/bind/db.ukom12tkjkafka-14
+      sudo systemctl reload bind9
+
+   b. Di server (Apache):
+   sudo mkdir /var/www/landing2
+   sudo nano /etc/apache2/sites-available/landing2.conf
+
+   <VirtualHost *:80>
+       ServerName landing2.ukom12tkjkafka-14.sch.id
+       DocumentRoot /var/www/landing2
+   </VirtualHost>
+
+   sudo a2ensite landing2.conf
+   sudo apache2ctl configtest
+   sudo systemctl reload apache2
+
+Port selain 80/443 (misal 8080): tidak perlu ubah router (tanpa firewall
+filter). Di server cukup tambah "Listen 8080" di /etc/apache2/ports.conf,
+buat VirtualHost *:8080, dan sudo ufw allow 8080/tcp.
+
+
+==========================================================
+SELESAI
+==========================================================
